@@ -27,9 +27,6 @@ from scipy.spatial.transform import Rotation
 import clip
 import random
 
-from scene.cameras import Camera
-
-
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -144,19 +141,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             cam_2.T = T_inter
 
             bg = torch.rand((3), device="cuda") if opt.random_background else background
-
-            new_cam_1 = Camera(colmap_id=cam_1.uid, R=cam_1.R, T=cam_1.T, 
-                    FoVx=cam_1.FovX, FoVy=cam_1.FovY, 
-                    image=cam_1.image, gt_alpha_mask=cam_1.gt_alpha_mask,
-                    image_name=cam_1.image_name, uid=id, data_device=cam_1.data_device)
-            
-            new_cam_2 = Camera(colmap_id=cam_1.uid, R=cam_1.R, T=cam_1.T, 
-                    FoVx=cam_1.FovX, FoVy=cam_1.FovY, 
-                    image=cam_1.image, gt_alpha_mask=cam_1.gt_alpha_mask,
-                    image_name=cam_1.image_name, uid=id, data_device=cam_1.data_device)
-
-            render_pkg1 = render(new_cam_1, gaussians, pipe, bg)
-            render_pkg2 = render(new_cam_2, gaussians, pipe, bg)
+            render_pkg1 = render(cam_1, gaussians, pipe, bg)
+            render_pkg2 = render(cam_2, gaussians, pipe, bg)
 
             image1 = render_pkg1["render"].unsqueeze(0)
             image2 = render_pkg2["render"].unsqueeze(0)
