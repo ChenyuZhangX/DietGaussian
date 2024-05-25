@@ -27,8 +27,6 @@ from arguments import ModelParams, PipelineParams, OptimizationParams
 from scipy.spatial.transform import Rotation
 import clip
 import random
-from utils.clip_utils import sample_t
-from scene.cameras import Camera
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -75,9 +73,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     for cam in random_cam_stack:
         norms.append(np.linalg.norm(cam.T))
     norms = np.array(norms).mean()
-    
-    # iter after which scene is good, start to use clip loss
-    clip_iter = 40000
+        
+
+
     for iteration in range(first_iter, opt.iterations + 1):        
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -118,59 +116,50 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         render_pkg = render(viewpoint_cam, gaussians, pipe, bg)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         
+       
 
-        cam_from_train = True
-        if with_clip and iteration > clip_iter:
-            if cam_from_train:
-                random_cam_stack = scene.getTrainCameras().copy()
-                index = random.sample(list(range(len(random_cam_stack))), 2)
-                # print(index)
-                cam_1 = random_cam_stack[index[0]]
-                cam_2 = random_cam_stack[index[1]]
-
-                R = viewpoint_cam.R
-                T = viewpoint_cam.T
-                
-                R1 = cam_1.R
-                R2 = cam_2.R
-                T1 = cam_1.T
-                T2 = cam_2.T
-
-                q = Rotation.from_matrix(R).as_quat()
-                q1 = Rotation.from_matrix(R1).as_quat()
-                q2 = Rotation.from_matrix(R2).as_quat()
-
-                cam_1.R = Rotation.from_quat(0.8 * q + 0.2 * q1).as_matrix()
-                cam_1.T = 0.9 * T + 0.2 * T1
-
-                cam_2.R = Rotation.from_quat(0.8 * q + 0.2 * q2).as_matrix()
-                cam_2.T = 0.9 * T + 0.2 * T2
-            else:
-                cam_1 = viewpoint_cam
-                cam_2 = viewpoint_cam
-
-                cam_1.T = sample_t(norms, 1)[0]
-                cam_2.T = sample_t(norms, 1)[0]
-
-            new_cam_1 = Camera(colmap_id=cam_1.uid, R=cam_1.R, T=cam_1.T, 
-                    FoVx=cam_1.FoVx, FoVy=cam_1.FoVy, 
-                    image=cam_1.image, gt_alpha_mask=cam_1.gt_alpha_mask,
-                    image_name=cam_1.image_name, uid=id, data_device=cam_1.data_device)
+        if with_clip:
+            random_cam_stack = scene.getTrainCameras().copy()
             
-            new_cam_2 = Camera(colmap_id=cam_2.uid, R=cam_2.R, T=cam_2.T, 
-                    FoVx=cam_2.FoVx, FoVy=cam_2.FoVy, 
-                    image=cam_2.image, gt_alpha_mask=cam_2.gt_alpha_mask,
-                    image_name=cam_2.image_name, uid=id, data_device=cam_2.data_device)
+            index = random.sample(list(range(len(random_cam_stack))), 2)
+            # print(index)
+
+
+
+            cam_1 = random_cam_stack[index[0]]
+            cam_2 = random_cam_stack[index[1]]
+
+            R1 = cam_1.R
+            R2 = cam_2.R
+            T1 = cam_1.T
+            T2 = cam_2.T
+
+            q1 = Rotation.from_matrix(R1).as_quat()
+            q2 = Rotation.from_matrix(R2).as_quat()
+
+            # interpolate between the two rotations
+            q_inter = 0.8 * q1 + 0.2 * q2
+            R_inter = Rotation.from_quat(q_inter).as_matrix()
+            T_inter = 0.8 * T1 + 0.2 * T2
+            cam_1.R = R_inter
+            cam_1.T = T_inter
+
+            # interpolate between the two rotations
+            q_inter = 0.8 * q2 + 0.2 * q1
+            R_inter = Rotation.from_quat(q_inter).as_matrix()
+            T_inter = 0.8 * T2 + 0.2 * T1
+            cam_2.R = R_inter
+            cam_2.T = T_inter
 
             bg = torch.rand((3), device="cuda") if opt.random_background else background
-            render_pkg1 = render(new_cam_1, gaussians, pipe, bg)
-            render_pkg2 = render(new_cam_2, gaussians, pipe, bg)
+            render_pkg1 = render(cam_1, gaussians, pipe, bg)
+            render_pkg2 = render(cam_2, gaussians, pipe, bg)
 
             image1 = render_pkg1["render"].unsqueeze(0)
             image2 = render_pkg2["render"].unsqueeze(0)
 
-            gt1 = new_cam_1.original_image.cuda()
-            gt2 = new_cam_2.original_image.cuda()
+            gt1 = cam_1.original_image.cuda()
+            gt2 = cam_2.original_image.cuda()
 
             clip_loss = 0.0
 
@@ -181,8 +170,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 gt1_feature = clip_model.encode_image(clip_preprocess(gt1.unsqueeze(0)))
                 gt2_feature = clip_model.encode_image(clip_preprocess(gt2.unsqueeze(0)))
                 
-            clip_loss -= torch.nn.functional.cosine_similarity(gt1_feature, feature1, dim=-1).mean()
-            clip_loss -= torch.nn.functional.cosine_similarity(gt2_feature, feature2, dim=-1).mean()
+            clip_loss += torch.nn.functional.cosine_similarity(gt1_feature, feature1, dim=-1).mean()
+            clip_loss += torch.nn.functional.cosine_similarity(gt2_feature, feature2, dim=-1).mean()
 
             '''
             print(image1.shape) # torch.Size([3, 1066, 1600])
@@ -194,7 +183,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
-        if with_clip and iteration > clip_iter:
+        if with_clip and iteration > 30000:
             loss += clip_loss * 0.02
         loss.backward()
 
