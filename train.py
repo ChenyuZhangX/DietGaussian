@@ -22,13 +22,18 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
+
+from scipy.spatial.transform import Rotation
+import clip
+import random
+
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
 except ImportError:
     TENSORBOARD_FOUND = False
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, **kwargs):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
@@ -48,6 +53,21 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     ema_loss_for_log = 0.0
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
+
+    # supervision model
+    with_clip = kwargs.get("with_clip", False)
+
+    if with_clip:
+        clip_model, _ = clip.load("ViT-B/32", device="cuda")
+        clip_model.eval()
+        from torchvision.transforms import Compose, Resize, CenterCrop, Normalize, InterpolationMode
+        clip_preprocess = Compose([
+            Resize(size=224, interpolation=InterpolationMode.BICUBIC, max_size=None, antialias=None), 
+            CenterCrop(size=(224, 224)), 
+            Normalize(mean=(0.48145466, 0.4578275, 0.40821073), std=(0.26862954, 0.26130258, 0.27577711)),
+            ])
+
+
     for iteration in range(first_iter, opt.iterations + 1):        
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -77,6 +97,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             viewpoint_stack = scene.getTrainCameras().copy()
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
 
+        
+
         # Render
         if (iteration - 1) == debug_from:
             pipe.debug = True
@@ -85,11 +107,73 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         render_pkg = render(viewpoint_cam, gaussians, pipe, bg)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+        
+       
 
+        if with_clip and iteration > 30000:
+            random_cam_stack = scene.getTrainCameras().copy()
+            index = random.sample(list(range(len(random_cam_stack))), 2)
+            # print(index)
+
+            cam_1 = random_cam_stack[index[0]]
+            cam_2 = random_cam_stack[index[1]]
+
+            R1 = cam_1.R
+            R2 = cam_2.R
+            T1 = cam_1.T
+            T2 = cam_2.T
+
+            q1 = Rotation.from_matrix(R1).as_quat()
+            q2 = Rotation.from_matrix(R2).as_quat()
+
+            # interpolate between the two rotations
+            q_inter = 0.8 * q1 + 0.2 * q2
+            R_inter = Rotation.from_quat(q_inter).as_matrix()
+            T_inter = 0.8 * T1 + 0.2 * T2
+            cam_1.R = R_inter
+            cam_1.T = T_inter
+
+            # interpolate between the two rotations
+            q_inter = 0.8 * q2 + 0.2 * q1
+            R_inter = Rotation.from_quat(q_inter).as_matrix()
+            T_inter = 0.8 * T2 + 0.2 * T1
+            cam_2.R = R_inter
+            cam_2.T = T_inter
+
+            bg = torch.rand((3), device="cuda") if opt.random_background else background
+            render_pkg1 = render(cam_1, gaussians, pipe, bg)
+            render_pkg2 = render(cam_2, gaussians, pipe, bg)
+
+            image1 = render_pkg1["render"].unsqueeze(0)
+            image2 = render_pkg2["render"].unsqueeze(0)
+
+            gt1 = cam_1.original_image.cuda()
+            gt2 = cam_2.original_image.cuda()
+
+            clip_loss = 0.0
+
+            feature1 = clip_model.encode_image(clip_preprocess(image1))
+            feature2 = clip_model.encode_image(clip_preprocess(image2))
+            
+            with torch.no_grad():
+                gt1_feature = clip_model.encode_image(clip_preprocess(gt1.unsqueeze(0)))
+                gt2_feature = clip_model.encode_image(clip_preprocess(gt2.unsqueeze(0)))
+                
+            clip_loss += torch.nn.functional.cosine_similarity(gt1_feature, feature1, dim=-1).mean()
+            clip_loss += torch.nn.functional.cosine_similarity(gt2_feature, feature2, dim=-1).mean()
+
+            '''
+            print(image1.shape) # torch.Size([3, 1066, 1600])
+            print(image1.shape, image1.max()) # torch.Size([1, 3, 1066, 1600]) tensor(0.6928, device='cuda:0', grad_fn=<MaxBackward1>)
+            print(feature1.shape) # torch.Size([1, 512])
+            '''
+        
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+        if with_clip and iteration > 30000:
+            loss += clip_loss * 0.8
         loss.backward()
 
         iter_end.record()
@@ -205,6 +289,10 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
+
+    # new args
+    parser.add_argument("--with_clip", action='store_true', default = False)
+
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
     
@@ -216,7 +304,9 @@ if __name__ == "__main__":
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, 
+             args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, 
+             args.debug_from, with_clip = args.with_clip)
 
     # All done
     print("\nTraining complete.")

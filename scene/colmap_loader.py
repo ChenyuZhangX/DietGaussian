@@ -292,3 +292,7 @@ def read_colmap_bin_array(path):
         array = np.fromfile(fid, np.float32)
     array = array.reshape((width, height, channels), order="F")
     return np.transpose(array, (1, 0, 2)).squeeze()
+
+if __name__ == "__main__":
+    cam_extrinsic_path = "data/toy/undistort/sparse/images.bin"
+    cam_extrinsic = read_extrinsics_binary(cam_extrinsic_path)
