@@ -144,6 +144,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 q1 = Rotation.from_matrix(R1).as_quat()
                 q2 = Rotation.from_matrix(R2).as_quat()
 
+                # interpolate
                 cam_1.R = Rotation.from_quat(0.8 * q + 0.2 * q1).as_matrix()
                 cam_1.T = 0.9 * T + 0.2 * T1
 
@@ -173,8 +174,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             image1 = render_pkg1["render"].unsqueeze(0)
             image2 = render_pkg2["render"].unsqueeze(0)
 
-            gt1 = new_cam_1.original_image.cuda()
-            gt2 = new_cam_2.original_image.cuda()
+            # gt1 = new_cam_1.original_image.cuda()
+            # gt2 = new_cam_2.original_image.cuda()
 
             clip_loss = 0.0
 
@@ -185,16 +186,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 gt_feature = clip_model.encode_image(clip_preprocess(gt_image.unsqueeze(0)))
                 
             clip_loss -= torch.nn.functional.cosine_similarity(gt_feature, feature1, dim=-1).mean()
+            clip_loss -= torch.nn.functional.cosine_similarity(gt_feature, feature2, dim=-1).mean()
 
+            loss += clip_loss * 0.5
             '''
             print(image1.shape) # torch.Size([3, 1066, 1600])
             print(image1.shape, image1.max()) # torch.Size([1, 3, 1066, 1600]) tensor(0.6928, device='cuda:0', grad_fn=<MaxBackward1>)
             print(feature1.shape) # torch.Size([1, 512])
             '''
-        
-        
-        if with_clip and iteration > clip_iter:
-            loss += clip_loss * 0.02
+            
         loss.backward()
 
         iter_end.record()
