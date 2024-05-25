@@ -113,7 +113,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         
        
 
-        if with_clip and iteration > 30000:
+        if with_clip and iteration > 3000:
             random_cam_stack = scene.getTrainCameras().copy()
             index = random.sample(list(range(len(random_cam_stack))), 2)
             # print(index)
@@ -146,14 +146,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             bg = torch.rand((3), device="cuda") if opt.random_background else background
 
             new_cam_1 = Camera(colmap_id=cam_1.uid, R=cam_1.R, T=cam_1.T, 
-                    FoVx=cam_1.FovX, FoVy=cam_1.FovY, 
+                    FoVx=cam_1.FoVx, FoVy=cam_1.FoVy, 
                     image=cam_1.image, gt_alpha_mask=cam_1.gt_alpha_mask,
                     image_name=cam_1.image_name, uid=id, data_device=cam_1.data_device)
             
-            new_cam_2 = Camera(colmap_id=cam_1.uid, R=cam_1.R, T=cam_1.T, 
-                    FoVx=cam_1.FovX, FoVy=cam_1.FovY, 
-                    image=cam_1.image, gt_alpha_mask=cam_1.gt_alpha_mask,
-                    image_name=cam_1.image_name, uid=id, data_device=cam_1.data_device)
+            new_cam_2 = Camera(colmap_id=cam_2.uid, R=cam_2.R, T=cam_2.T, 
+                    FoVx=cam_2.FoVx, FoVy=cam_2.FoVy, 
+                    image=cam_2.image, gt_alpha_mask=cam_2.gt_alpha_mask,
+                    image_name=cam_2.image_name, uid=id, data_device=cam_2.data_device)
 
             render_pkg1 = render(new_cam_1, gaussians, pipe, bg)
             render_pkg2 = render(new_cam_2, gaussians, pipe, bg)
@@ -186,7 +186,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
-        if with_clip and iteration > 30000:
+        if with_clip and iteration > 3000:
             loss += clip_loss * 0.8
         loss.backward()
 
@@ -298,8 +298,8 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 10_000, 20_000, 30_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 10_000, 20_000, 30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
