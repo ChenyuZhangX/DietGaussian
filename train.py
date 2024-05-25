@@ -118,6 +118,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         render_pkg = render(viewpoint_cam, gaussians, pipe, bg)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         
+        # Loss
+        gt_image = viewpoint_cam.original_image.cuda()
+        Ll1 = l1_loss(image, gt_image)
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
 
         cam_from_train = True
         if with_clip and iteration > clip_iter:
@@ -130,7 +134,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
                 R = viewpoint_cam.R
                 T = viewpoint_cam.T
-                
+
                 R1 = cam_1.R
                 R2 = cam_2.R
                 T1 = cam_1.T
@@ -178,11 +182,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             feature2 = clip_model.encode_image(clip_preprocess(image2))
             
             with torch.no_grad():
-                gt1_feature = clip_model.encode_image(clip_preprocess(gt1.unsqueeze(0)))
-                gt2_feature = clip_model.encode_image(clip_preprocess(gt2.unsqueeze(0)))
+                gt_feature = clip_model.encode_image(clip_preprocess(gt_image.unsqueeze(0)))
                 
-            clip_loss -= torch.nn.functional.cosine_similarity(gt1_feature, feature1, dim=-1).mean()
-            clip_loss -= torch.nn.functional.cosine_similarity(gt2_feature, feature2, dim=-1).mean()
+            clip_loss -= torch.nn.functional.cosine_similarity(gt_feature, feature1, dim=-1).mean()
 
             '''
             print(image1.shape) # torch.Size([3, 1066, 1600])
@@ -190,10 +192,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             print(feature1.shape) # torch.Size([1, 512])
             '''
         
-        # Loss
-        gt_image = viewpoint_cam.original_image.cuda()
-        Ll1 = l1_loss(image, gt_image)
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+        
         if with_clip and iteration > clip_iter:
             loss += clip_loss * 0.02
         loss.backward()
