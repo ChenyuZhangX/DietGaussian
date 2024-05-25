@@ -77,7 +77,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     norms = np.array(norms).mean()
     
     # iter after which scene is good, start to use clip loss
-    clip_iter = 40000
+    clip_iter = 20000
+    cam_from_train = True
+
     for iteration in range(first_iter, opt.iterations + 1):        
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -123,7 +125,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         Ll1 = l1_loss(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
 
-        cam_from_train = True
+        
         if with_clip and iteration > clip_iter:
             if cam_from_train:
                 random_cam_stack = scene.getTrainCameras().copy()

@@ -28,6 +28,8 @@ class Camera(nn.Module):
         self.FoVx = FoVx
         self.FoVy = FoVy
         self.image_name = image_name
+        self.image = image
+        self.gt_alpha_mask = gt_alpha_mask
 
         try:
             self.data_device = torch.device(data_device)
