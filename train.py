@@ -77,8 +77,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     norms = np.array(norms).mean()
     
     # iter after which scene is good, start to use clip loss
-    clip_iter = 20000
+    clip_iter = 0
     cam_from_train = True
+    multi_modal = False
+    multi_modal_iter = clip_iter
 
     for iteration in range(first_iter, opt.iterations + 1):        
         if network_gui.conn == None:
@@ -125,33 +127,53 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         Ll1 = l1_loss(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
 
-        
+        # multi-modal loss
+        if multi_modal and iteration > multi_modal_iter:
+            pass
+
+
+        # clip loss
         if with_clip and iteration > clip_iter:
             if cam_from_train:
                 random_cam_stack = scene.getTrainCameras().copy()
-                index = random.sample(list(range(len(random_cam_stack))), 2)
+                index = random.sample(list(range(len(random_cam_stack))), 4)
                 # print(index)
                 cam_1 = random_cam_stack[index[0]]
                 cam_2 = random_cam_stack[index[1]]
+                cam_3 = random_cam_stack[index[2]]
+                cam_4 = random_cam_stack[index[3]]
 
                 R = viewpoint_cam.R
                 T = viewpoint_cam.T
 
                 R1 = cam_1.R
                 R2 = cam_2.R
+                R3 = cam_3.R
+                R4 = cam_4.R
+
                 T1 = cam_1.T
                 T2 = cam_2.T
+                T3 = cam_3.T
+                T4 = cam_4.T
 
                 q = Rotation.from_matrix(R).as_quat()
                 q1 = Rotation.from_matrix(R1).as_quat()
                 q2 = Rotation.from_matrix(R2).as_quat()
+                q3 = Rotation.from_matrix(R3).as_quat()
+                q4 = Rotation.from_matrix(R4).as_quat()
 
                 # interpolate
-                cam_1.R = Rotation.from_quat(0.8 * q + 0.2 * q1).as_matrix()
-                cam_1.T = 0.9 * T + 0.2 * T1
+                cam_1.R = Rotation.from_quat(0.9 * q + 0.1 * q1).as_matrix()
+                cam_1.T = 0.9 * T + 0.1 * T1
 
-                cam_2.R = Rotation.from_quat(0.8 * q + 0.2 * q2).as_matrix()
-                cam_2.T = 0.9 * T + 0.2 * T2
+                cam_2.R = Rotation.from_quat(0.9 * q + 0.1 * q2).as_matrix()
+                cam_2.T = 0.9 * T + 0.1 * T2
+
+                cam_3.R = Rotation.from_quat(0.1 * q + 0.9 * q3).as_matrix()
+                cam_3.T = 0.1 * T + 0.9 * T3
+
+                cam_4.R = Rotation.from_quat(0.1 * q + 0.9 * q4).as_matrix()
+                cam_4.T = 0.1 * T + 0.9 * T4
             else:
                 cam_1 = viewpoint_cam
                 cam_2 = viewpoint_cam
@@ -168,29 +190,58 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     FoVx=cam_2.FoVx, FoVy=cam_2.FoVy, 
                     image=cam_2.image, gt_alpha_mask=cam_2.gt_alpha_mask,
                     image_name=cam_2.image_name, uid=id, data_device=cam_2.data_device)
-
+            
+            new_cam_3 = Camera(colmap_id=cam_3.uid, R=cam_3.R, T=cam_3.T,
+                    FoVx=cam_3.FoVx, FoVy=cam_3.FoVy, 
+                    image=cam_3.image, gt_alpha_mask=cam_3.gt_alpha_mask,
+                    image_name=cam_3.image_name, uid=id, data_device=cam_3.data_device)
+            
+            new_cam_4 = Camera(colmap_id=cam_4.uid, R=cam_4.R, T=cam_4.T,
+                    FoVx=cam_4.FoVx, FoVy=cam_4.FoVy, 
+                    image=cam_4.image, gt_alpha_mask=cam_4.gt_alpha_mask,
+                    image_name=cam_4.image_name, uid=id, data_device=cam_4.data_device)
+            
             bg = torch.rand((3), device="cuda") if opt.random_background else background
             render_pkg1 = render(new_cam_1, gaussians, pipe, bg)
             render_pkg2 = render(new_cam_2, gaussians, pipe, bg)
+            render_pkg3 = render(new_cam_3, gaussians, pipe, bg)
+            render_pkg4 = render(new_cam_4, gaussians, pipe, bg)
 
             image1 = render_pkg1["render"].unsqueeze(0)
             image2 = render_pkg2["render"].unsqueeze(0)
+            image3 = render_pkg3["render"].unsqueeze(0)
+            image4 = render_pkg4["render"].unsqueeze(0)
 
             # gt1 = new_cam_1.original_image.cuda()
             # gt2 = new_cam_2.original_image.cuda()
 
             clip_loss = 0.0
 
+            feature = clip_model.encode_image(clip_preprocess(image.unsqueeze(0)))
             feature1 = clip_model.encode_image(clip_preprocess(image1))
             feature2 = clip_model.encode_image(clip_preprocess(image2))
+            feature3 = clip_model.encode_image(clip_preprocess(image3))
+            feature4 = clip_model.encode_image(clip_preprocess(image4))
+
+            gt3 = cam_3.original_image.cuda()
+            gt4 = cam_4.original_image.cuda()
             
             with torch.no_grad():
                 gt_feature = clip_model.encode_image(clip_preprocess(gt_image.unsqueeze(0)))
-                
+                gt3_feature = clip_model.encode_image(clip_preprocess(gt3.unsqueeze(0)))
+                gt4_feature = clip_model.encode_image(clip_preprocess(gt4.unsqueeze(0)))
+
+            # gt supervise other
             clip_loss -= torch.nn.functional.cosine_similarity(gt_feature, feature1, dim=-1).mean()
             clip_loss -= torch.nn.functional.cosine_similarity(gt_feature, feature2, dim=-1).mean()
+            clip_loss -= torch.nn.functional.cosine_similarity(gt3_feature, feature3, dim=-1).mean()
+            clip_loss -= torch.nn.functional.cosine_similarity(gt4_feature, feature4, dim=-1).mean()
+            
+            # gt vs render
+            clip_loss -= 4 * torch.nn.functional.cosine_similarity(gt_feature, feature, dim=-1).mean()
 
-            loss += clip_loss * 0.5
+            loss += clip_loss * 0.1
+            
             '''
             print(image1.shape) # torch.Size([3, 1066, 1600])
             print(image1.shape, image1.max()) # torch.Size([1, 3, 1066, 1600]) tensor(0.6928, device='cuda:0', grad_fn=<MaxBackward1>)
