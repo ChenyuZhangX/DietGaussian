@@ -225,6 +225,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             gt3 = cam_3.original_image.cuda()
             gt4 = cam_4.original_image.cuda()
+
+            print(image1.shape)
+
             
             with torch.no_grad():
                 gt_feature = clip_model.encode_image(clip_preprocess(gt_image.unsqueeze(0)))

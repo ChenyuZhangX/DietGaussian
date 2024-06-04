@@ -1,0 +1,1 @@
+Namespace(data_device='cuda', eval=False, images='images', model_path='debug', resolution=4, sh_degree=3, source_path='/mnt/zhangchenyu/code/gaussian-splatting/data/toy/undistort', white_background=False)
