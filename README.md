@@ -1,5 +1,6 @@
 # Diet Gaussian
 
+![DietGaussian](./assets/dietgaussian.png)
 
 ## New Codes
 
