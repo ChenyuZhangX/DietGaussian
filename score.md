@@ -1,1 +1,0 @@
-$$simi = \frac{1}{N} \sum_{i = 1}^{N} \sum_{j = 1}^{N} \braket{I_i, I_j}$$
